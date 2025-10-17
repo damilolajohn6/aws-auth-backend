@@ -47,7 +47,7 @@ A secure, scalable, and cost-effective user authentication service built with Ty
 ### 1. Clone and Install Dependencies
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/damilolajohn6/aws-auth-backend.git
 cd aws-auth-backend
 npm install
 ```
