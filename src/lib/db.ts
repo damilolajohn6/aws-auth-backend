@@ -211,24 +211,27 @@ export async function revokeRefreshToken(tokenId: string): Promise<void> {
  * Revoke all tokens in a token family (for token rotation breach detection)
  */
 export async function revokeTokenFamily(userId: string, tokenFamily: string): Promise<void> {
-  // Query all tokens for this user and family
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: TABLE_NAME,
-      IndexName: 'GSI1', // Need GSI on userId-tokenFamily
-      KeyConditionExpression: 'userId = :userId',
-      FilterExpression: 'tokenFamily = :family',
-      ExpressionAttributeValues: {
-        ':userId': userId,
-        ':family': tokenFamily,
-      },
-    })
-  );
+  // Query all tokens for this user and family using composite key on GSI1
+  let lastEvaluatedKey: Record<string, any> | undefined = undefined;
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: TABLE_NAME,
+        IndexName: 'GSI1', // GSI has partitionKey=userId, sortKey=tokenFamily
+        KeyConditionExpression: 'userId = :userId AND tokenFamily = :family',
+        ExpressionAttributeValues: {
+          ':userId': userId,
+          ':family': tokenFamily,
+        },
+        ExclusiveStartKey: lastEvaluatedKey,
+      })
+    );
 
-  // Revoke each token
-  const revokePromises = (result.Items || []).map((item) =>
-    revokeRefreshToken(item.pk.replace('TOKEN#', ''))
-  );
+    const revokePromises = (result.Items || []).map((item) =>
+      revokeRefreshToken((item as any).pk.replace('TOKEN#', ''))
+    );
+    await Promise.all(revokePromises);
 
-  await Promise.all(revokePromises);
+    lastEvaluatedKey = result.LastEvaluatedKey as any;
+  } while (lastEvaluatedKey);
 }

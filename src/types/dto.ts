@@ -48,6 +48,7 @@ export interface RefreshTokenRecord {
   expiresAt: string;
   createdAt: string;
   lastUsedAt?: string;
+  ttl?: number;
 }
 
 // JWT payload types

@@ -8,7 +8,19 @@ const SECRET_NAME = process.env.JWT_SECRET_NAME || 'auth-service/jwt-secret';
 // Cache the secret to avoid repeated API calls
 let cachedSecret: Uint8Array | null = null;
 
-async function getJwtSecret(): Promise<Uint8Array> {
+/**
+ * Fetches the JWT secret from Secrets Manager and caches it to avoid repeated API calls.
+ */
+export async function getJwtSecret(): Promise<Uint8Array> {
+  // In test environment, use an env-provided secret or a deterministic fallback
+  if (process.env.NODE_ENV === 'test') {
+    if (!cachedSecret) {
+      const raw = process.env.JWT_SECRET || 'test-jwt-secret-key-at-least-32-chars-long-for-security';
+      cachedSecret = new TextEncoder().encode(raw);
+    }
+    return cachedSecret;
+  }
+
   if (cachedSecret) {
     return cachedSecret;
   }
@@ -22,7 +34,17 @@ async function getJwtSecret(): Promise<Uint8Array> {
       throw new Error('JWT secret not found in Secrets Manager');
     }
 
-    cachedSecret = new TextEncoder().encode(response.SecretString);
+    let secretString = response.SecretString;
+    try {
+      const parsed = JSON.parse(secretString);
+      if (parsed && typeof parsed.secret === 'string') {
+        secretString = parsed.secret;
+      }
+    } catch {
+      // not JSON, treat as raw secret string
+    }
+
+    cachedSecret = new TextEncoder().encode(secretString);
     return cachedSecret;
   } catch (error) {
     console.error('Failed to fetch JWT secret:', error);

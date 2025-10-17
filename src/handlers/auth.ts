@@ -196,6 +196,7 @@ export const login: APIGatewayProxyHandlerV2 = async (event) => {
       isRevoked: false,
       expiresAt: expiresAt.toISOString(),
       createdAt: now,
+      ttl: Math.floor(expiresAt.getTime() / 1000),
     };
 
     await storeRefreshToken(tokenRecord);
@@ -327,6 +328,7 @@ export const refresh: APIGatewayProxyHandlerV2 = async (event) => {
       expiresAt: expiresAt.toISOString(),
       createdAt: now,
       lastUsedAt: now,
+      ttl: Math.floor(expiresAt.getTime() / 1000),
     };
 
     await storeRefreshToken(newTokenRecord);
