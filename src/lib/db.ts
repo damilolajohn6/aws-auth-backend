@@ -1,4 +1,5 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+
 import {
   DynamoDBDocumentClient,
   GetCommand,
@@ -8,7 +9,12 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { UserProfile, RefreshTokenRecord } from '../types/dto';
 
-const client = new DynamoDBClient({});
+const USE_IN_MEMORY = process.env.USE_IN_MEMORY === 'true';
+
+// Configure DynamoDB client with optional endpoint override (for LocalStack/DynamoDB Local)
+const client = new DynamoDBClient({
+  endpoint: process.env.AWS_ENDPOINT_URL_DYNAMODB || undefined,
+});
 const docClient = DynamoDBDocumentClient.from(client, {
   marshallOptions: {
     removeUndefinedValues: true,
@@ -23,6 +29,10 @@ const LOCKOUT_DURATION_MINUTES = 15;
  * Get user by email
  */
 export async function getUserByEmail(email: string): Promise<UserProfile | null> {
+  if (USE_IN_MEMORY) {
+    const user = memory.users.get(email) || null;
+    return user ? { ...user } : null;
+  }
   const result = await docClient.send(
     new GetCommand({
       TableName: TABLE_NAME,
@@ -35,6 +45,15 @@ export async function getUserByEmail(email: string): Promise<UserProfile | null>
 
   return result.Item as UserProfile | null;
 }
+
+// In-memory storage for local development
+const memory: {
+  users: Map<string, UserProfile>;
+  tokens: Map<string, RefreshTokenRecord>;
+} = {
+  users: new Map(),
+  tokens: new Map(),
+};
 
 /**
  * Create a new user (idempotent with conditional expression)
@@ -55,7 +74,13 @@ export async function putUser(data: {
     updatedAt: now,
     failedLoginCount: 0,
   };
-
+  if (USE_IN_MEMORY) {
+    if (memory.users.has(data.email)) {
+      throw new Error('User already exists');
+    }
+    memory.users.set(data.email, { ...user });
+    return;
+  }
   try {
     await docClient.send(
       new PutCommand({
@@ -79,6 +104,17 @@ export async function updateLoginMeta(
   email: string,
   data: { lastLoginAt: string; failedLoginCount: number }
 ): Promise<void> {
+  if (USE_IN_MEMORY) {
+    const u = memory.users.get(email);
+    if (u) {
+      u.lastLoginAt = data.lastLoginAt;
+      u.failedLoginCount = data.failedLoginCount;
+      u.updatedAt = new Date().toISOString();
+      u.accountLocked = false;
+      delete (u as any).accountLockedUntil;
+    }
+    return;
+  }
   await docClient.send(
     new UpdateCommand({
       TableName: TABLE_NAME,
@@ -102,6 +138,21 @@ export async function updateLoginMeta(
  * Increment failed login count and lock account if threshold exceeded
  */
 export async function incrementFailedLogin(email: string): Promise<{ locked: boolean }> {
+  if (USE_IN_MEMORY) {
+    const u = memory.users.get(email);
+    if (!u) return { locked: false };
+    const newFailCount = (u.failedLoginCount || 0) + 1;
+    const shouldLock = newFailCount >= MAX_FAILED_LOGINS;
+    u.failedLoginCount = newFailCount;
+    u.updatedAt = new Date().toISOString();
+    if (shouldLock) {
+      u.accountLocked = true;
+      const lockUntil = new Date();
+      lockUntil.setMinutes(lockUntil.getMinutes() + LOCKOUT_DURATION_MINUTES);
+      u.accountLockedUntil = lockUntil.toISOString();
+    }
+    return { locked: shouldLock };
+  }
   const user = await getUserByEmail(email);
   if (!user) {
     return { locked: false };
@@ -163,6 +214,11 @@ export function isAccountLocked(user: UserProfile): boolean {
  * Store refresh token record
  */
 export async function storeRefreshToken(token: RefreshTokenRecord): Promise<void> {
+  if (USE_IN_MEMORY) {
+    const tokenId = token.pk.replace('TOKEN#', '');
+    memory.tokens.set(tokenId, { ...token });
+    return;
+  }
   await docClient.send(
     new PutCommand({
       TableName: TABLE_NAME,
@@ -175,6 +231,10 @@ export async function storeRefreshToken(token: RefreshTokenRecord): Promise<void
  * Get refresh token record
  */
 export async function getRefreshToken(tokenId: string): Promise<RefreshTokenRecord | null> {
+  if (USE_IN_MEMORY) {
+    const rec = memory.tokens.get(tokenId) || null;
+    return rec ? { ...rec } : null;
+  }
   const result = await docClient.send(
     new GetCommand({
       TableName: TABLE_NAME,
@@ -192,6 +252,14 @@ export async function getRefreshToken(tokenId: string): Promise<RefreshTokenReco
  * Revoke a refresh token
  */
 export async function revokeRefreshToken(tokenId: string): Promise<void> {
+  if (USE_IN_MEMORY) {
+    const rec = memory.tokens.get(tokenId);
+    if (rec) {
+      rec.isRevoked = true;
+      memory.tokens.set(tokenId, rec);
+    }
+    return;
+  }
   await docClient.send(
     new UpdateCommand({
       TableName: TABLE_NAME,
@@ -211,6 +279,15 @@ export async function revokeRefreshToken(tokenId: string): Promise<void> {
  * Revoke all tokens in a token family (for token rotation breach detection)
  */
 export async function revokeTokenFamily(userId: string, tokenFamily: string): Promise<void> {
+  if (USE_IN_MEMORY) {
+    for (const [id, rec] of memory.tokens.entries()) {
+      if (rec.userId === userId && rec.tokenFamily === tokenFamily) {
+        rec.isRevoked = true;
+        memory.tokens.set(id, rec);
+      }
+    }
+    return;
+  }
   // Query all tokens for this user and family using composite key on GSI1
   let lastEvaluatedKey: Record<string, any> | undefined = undefined;
   do {

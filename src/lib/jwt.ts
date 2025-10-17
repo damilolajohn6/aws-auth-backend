@@ -12,6 +12,14 @@ let cachedSecret: Uint8Array | null = null;
  * Fetches the JWT secret from Secrets Manager and caches it to avoid repeated API calls.
  */
 export async function getJwtSecret(): Promise<Uint8Array> {
+  // If a direct JWT secret is provided, prefer it (local development)
+  if (process.env.JWT_SECRET) {
+    if (!cachedSecret) {
+      cachedSecret = new TextEncoder().encode(process.env.JWT_SECRET);
+    }
+    return cachedSecret;
+  }
+
   // In test environment, use an env-provided secret or a deterministic fallback
   if (process.env.NODE_ENV === 'test') {
     if (!cachedSecret) {

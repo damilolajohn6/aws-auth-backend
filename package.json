@@ -7,6 +7,7 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
+    "start:local": "ts-node local/server.ts",
     "deploy": "cdk deploy",
     "synth": "cdk synth",
     "destroy": "cdk destroy"
